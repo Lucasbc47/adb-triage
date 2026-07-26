@@ -1,0 +1,32 @@
+# Binaries
+*.exe
+*.dll
+*.so
+*.dylib
+*.app
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db
+.DS_Store?
+.AppleDouble
+.LSOverride
+
+# Go
+vendor/
+dist/
+build/
+*.test
+*.out
+
+# Local development
+.env
+.env.local
