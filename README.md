@@ -222,7 +222,7 @@ is one of these.
     {
       "package": "com.instagram.barcelona",
       "label": "Threads",
-      "category": "Redes sociais",
+      "category": "Social",
       "size_mb": 412,
       "launchable": true
     }
@@ -237,7 +237,7 @@ Useful one-liners:
 ./adb-triage --json | jq -r '.apps | sort_by(-.size_mb)[:10][] | "\(.size_mb)MB\t\(.label)"'
 
 # total space used by games
-./adb-triage --json | jq '[.apps[] | select(.category == "Jogos e emuladores") | .size_mb] | add'
+./adb-triage --json | jq '[.apps[] | select(.category == "Games & emulators") | .size_mb] | add'
 
 # snapshot before and after a cleanup
 ./adb-triage --dump > before.txt
