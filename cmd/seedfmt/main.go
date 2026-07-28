@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 )
 
 const path = "internal/classify/seed.json"
@@ -27,7 +28,7 @@ type kv struct {
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "erro:", err)
+		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
 }
@@ -79,6 +80,19 @@ func decodeOrdered(data []byte) ([]kv, error) {
 	return kvs, nil
 }
 
+// jsonString encodes s as a JSON string literal with HTML escaping off.
+// json.Marshal would render the "&" in a category name as "&": valid JSON,
+// but it destroys the hand-readable layout this tool exists to preserve.
+func jsonString(s string) (string, error) {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(s); err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(b.String(), "\n"), nil
+}
+
 func render(kvs []kv) ([]byte, error) {
 	// The alignment column is set by the single longest key, so every shorter
 	// key pads out to line up with it (with at least one space to spare).
@@ -97,11 +111,11 @@ func render(kvs []kv) ([]byte, error) {
 			b.WriteString("\n")
 		}
 
-		label, err := json.Marshal(e.e.Label)
+		label, err := jsonString(e.e.Label)
 		if err != nil {
 			return nil, err
 		}
-		category, err := json.Marshal(e.e.Category)
+		category, err := jsonString(e.e.Category)
 		if err != nil {
 			return nil, err
 		}

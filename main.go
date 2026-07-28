@@ -18,70 +18,84 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"adb-triage/internal/adb"
-	"adb-triage/internal/classify"
-	"adb-triage/internal/ui"
+	"github.com/Lucasbc47/adb-triage/internal/adb"
+	"github.com/Lucasbc47/adb-triage/internal/classify"
+	"github.com/Lucasbc47/adb-triage/internal/ui"
 )
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "erro:", err)
+		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
 }
 
+// readCtx bounds one startup adb read. Each call gets its own deadline rather
+// than sharing one budget, so a slow dumpsys does not starve the reads after it.
+func readCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), adb.ReadTimeout)
+}
+
 func run() error {
-	all := flag.Bool("all", false, "incluir apps sem icone na gaveta (servicos de fundo)")
-	useLLM := flag.Bool("llm", false, "consultar o Claude para nomes; sem isso usa so tabela embutida e cache")
-	dump := flag.Bool("dump", false, "imprimir a lista em texto e sair, sem abrir o TUI")
-	asJSON := flag.Bool("json", false, "imprimir a lista em JSON e sair, sem abrir o TUI")
+	all := flag.Bool("all", false, "include apps with no launcher icon (background services)")
+	useLLM := flag.Bool("llm", false, "ask Claude for unknown names; without it, only the embedded table and cache are used")
+	dump := flag.Bool("dump", false, "print the list as plain text and exit, without opening the TUI")
+	asJSON := flag.Bool("json", false, "print the list as JSON and exit, without opening the TUI")
 	flag.Parse()
 
-	devices, err := adb.Devices()
+	devCtx, cancelDev := readCtx()
+	defer cancelDev()
+	devices, err := adb.Devices(devCtx)
 	if err != nil {
-		return fmt.Errorf("nao consegui falar com o adb (esta no PATH?): %w", err)
+		return fmt.Errorf("could not talk to adb (is it on your PATH?): %w", err)
 	}
 	if len(devices) == 0 {
-		return fmt.Errorf("nenhum dispositivo autorizado. Conecte o celular e aceite a depuracao USB")
+		return fmt.Errorf("no authorized device found: connect your phone and accept the USB debugging prompt")
 	}
 	if len(devices) > 1 {
-		return fmt.Errorf("%d dispositivos conectados; desconecte os outros (ainda nao suporto escolher)", len(devices))
+		return fmt.Errorf("%d devices connected; disconnect the others (picking one is not supported yet)", len(devices))
 	}
 	device := devices[0]
 
 	// Progress goes to stderr so `--json > apps.json` stays valid JSON.
-	fmt.Fprintf(os.Stderr, "lendo pacotes de %s...\n", device.Model)
-	pkgs, err := adb.ThirdParty()
+	fmt.Fprintf(os.Stderr, "reading packages from %s...\n", device.Model)
+	pkgCtx, cancelPkg := readCtx()
+	defer cancelPkg()
+	pkgs, err := adb.ThirdParty(pkgCtx)
 	if err != nil {
 		return err
 	}
 	if len(pkgs) == 0 {
-		return fmt.Errorf("nenhum app de terceiros encontrado")
+		return fmt.Errorf("no third-party apps found")
 	}
 
 	// Sizes and launchability are nice-to-have; a failure here shouldn't stop
 	// the whole tool, so we degrade instead of returning.
-	sizes, err := adb.Sizes()
+	sizeCtx, cancelSize := readCtx()
+	defer cancelSize()
+	sizes, err := adb.Sizes(sizeCtx)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "aviso: nao consegui ler os tamanhos: %v\n", err)
+		fmt.Fprintf(os.Stderr, "warning: could not read app sizes: %v\n", err)
 		sizes = map[string]int64{}
 	}
-	launchable, err := adb.Launchable()
+	launchCtx, cancelLaunch := readCtx()
+	defer cancelLaunch()
+	launchable, err := adb.Launchable(launchCtx)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "aviso: nao consegui ler a lista da gaveta: %v\n", err)
+		fmt.Fprintf(os.Stderr, "warning: could not read the launcher list: %v\n", err)
 		launchable = map[string]bool{}
 	}
 
 	var warning string
 	var entries map[string]classify.Entry
 	if *useLLM {
-		fmt.Fprintf(os.Stderr, "resolvendo nomes de %d pacotes...\n", len(pkgs))
+		fmt.Fprintf(os.Stderr, "resolving names for %d packages...\n", len(pkgs))
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
 		entries, err = classify.Classify(ctx, pkgs)
 		if err != nil {
 			warning = err.Error()
-			fmt.Fprintln(os.Stderr, "aviso:", warning)
+			fmt.Fprintln(os.Stderr, "warning:", warning)
 		}
 	} else {
 		entries = classify.Lookup(pkgs)
@@ -105,7 +119,7 @@ func run() error {
 		})
 	}
 	if len(apps) == 0 {
-		return fmt.Errorf("nada pra mostrar (tente --all)")
+		return fmt.Errorf("nothing to show (try --all)")
 	}
 	sort.Slice(apps, func(i, j int) bool {
 		if apps[i].Category != apps[j].Category {

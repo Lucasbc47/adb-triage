@@ -1,14 +1,15 @@
 // Package ui implements the Bubble Tea interface for browsing and uninstalling
 // apps.
 //
-// Categories are tabs across the top; the list below shows only the active
-// tab's apps. Selection is keyed by package name and therefore survives tab
-// switches, so you can mark apps across several categories and remove them in
-// one pass. Uninstalling always routes through a full-screen review of exactly
-// what is about to be removed.
+// Categories are a column down the left; the list beside it shows only the
+// active category's apps. Selection is keyed by package name and therefore
+// survives category switches, so you can mark apps across several categories
+// and remove them in one pass. Uninstalling always routes through a full-screen
+// review of exactly what is about to be removed.
 package ui
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -16,13 +17,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"adb-triage/internal/adb"
-	"adb-triage/internal/classify"
+	"github.com/Lucasbc47/adb-triage/internal/adb"
+	"github.com/Lucasbc47/adb-triage/internal/classify"
 )
 
 const (
-	allTab = "Todos"
-	selTab = "Selecionados"
+	allTab = "All"
+	selTab = "Selected"
 )
 
 var (
@@ -47,8 +48,8 @@ var (
 	warnStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#D9A441"))
 )
 
-// tab is one category across the top. cursor and offset are remembered per tab
-// so switching away and back lands you where you left off.
+// tab is one row in the category column. cursor and offset are remembered per
+// tab so switching away and back lands you where you left off.
 type tab struct {
 	name   string
 	apps   []*adb.App
@@ -88,7 +89,7 @@ type Model struct {
 	filter        string
 	warning       string
 	flash         string // result of the last action, cleared on the next key
-	results       []string
+	results       []uninstallStepMsg
 	confirmScroll int
 
 	// Uninstall progress. queue is what's left to remove; the removal runs one
@@ -101,10 +102,11 @@ type Model struct {
 // New builds a model over the given apps. warning is displayed in the status
 // bar and may be empty.
 func New(device adb.Device, apps []*adb.App, warning string) Model {
-	known := make(map[string]bool, len(apps))
-	for _, a := range apps {
-		known[a.Pkg] = classify.Known(a.Pkg)
+	pkgs := make([]string, len(apps))
+	for i, a := range apps {
+		pkgs[i] = a.Pkg
 	}
+	known := classify.KnownSet(pkgs)
 	m := Model{
 		device:   device,
 		apps:     apps,
@@ -209,7 +211,7 @@ func (m Model) matches(a *adb.App) bool {
 		strings.Contains(strings.ToLower(a.Pkg), f)
 }
 
-// cur returns the active tab. The tab slice always holds at least "Todos", so
+// cur returns the active tab. The tab slice always holds at least allTab, so
 // this never returns nil.
 func (m *Model) cur() *tab { return &m.tabs[m.active] }
 
@@ -217,34 +219,44 @@ func (m *Model) cur() *tab { return &m.tabs[m.active] }
 // name plus its counts, narrow enough to leave the list room to breathe.
 const sidebarWidth = 26
 
-// listHeight is how many rows the body occupies, given fixed chrome above and
-// below: title, rule, rule, status, warning, and two help rows.
+// listHeight is how many rows the body occupies. The chrome around it is seven
+// fixed rows (title, rule, rule, status, flash, and two help rows); the eighth
+// keeps the last line clear of the bottom edge, which some terminals scroll.
 func (m Model) listHeight() int {
 	return max(3, m.height-8)
 }
 
-// windowTitle is what the terminal tab/window is named while the TUI runs.
-const windowTitle = "adb-triage"
-
-// Init sets the terminal title. Bubble Tea emits the OSC 2 escape sequence for
-// this, which every modern terminal emulator understands, so it works the same
-// on Windows Terminal, iTerm2, GNOME Terminal, Alacritty and the rest. It is
-// not a Windows `title` command and needs no shell involvement.
-func (m Model) Init() tea.Cmd { return tea.SetWindowTitle(windowTitle) }
+// Init names the terminal window. This goes out as an OSC 2 escape sequence,
+// not a shell command, so it behaves the same on every platform.
+func (m Model) Init() tea.Cmd { return tea.SetWindowTitle("adb-triage") }
 
 // uninstallStepMsg reports the result of removing one package. Removals run one
 // per command, not all in a single blocking batch: adb uninstall can take many
 // seconds each on some devices, and a 12-app batch in one command would freeze
 // the UI for minutes with no feedback.
-type uninstallStepMsg struct{ result string }
+//
+// failed is a field rather than a prefix on text because removeUninstalled uses
+// it to decide which apps actually left the device. Deriving that from display
+// text would make a wording change silently corrupt the app list.
+type uninstallStepMsg struct {
+	text   string
+	failed bool
+}
 
 // uninstallStep removes exactly one package and reports back.
 func uninstallStep(a *adb.App) tea.Cmd {
 	return func() tea.Msg {
-		if err := adb.Uninstall(a.Pkg); err != nil {
-			return uninstallStepMsg{"FALHOU  " + a.Label + " (" + a.Pkg + "): " + err.Error()}
+		// Per-step deadline rather than one for the whole queue: a single wedged
+		// package should fail and let the remaining removals proceed.
+		ctx, cancel := context.WithTimeout(context.Background(), adb.UninstallTimeout)
+		defer cancel()
+		if err := adb.Uninstall(ctx, a.Pkg); err != nil {
+			return uninstallStepMsg{
+				text:   "failed   " + a.Label + " (" + a.Pkg + "): " + err.Error(),
+				failed: true,
+			}
 		}
-		return uninstallStepMsg{"removido  " + a.Label + " (" + a.Pkg + ")"}
+		return uninstallStepMsg{text: "removed  " + a.Label + " (" + a.Pkg + ")"}
 	}
 }
 
@@ -257,7 +269,9 @@ type launchDoneMsg struct {
 
 func launchCmd(pkg, label string) tea.Cmd {
 	return func() tea.Msg {
-		return launchDoneMsg{label: label, err: adb.Launch(pkg)}
+		ctx, cancel := context.WithTimeout(context.Background(), adb.LaunchTimeout)
+		defer cancel()
+		return launchDoneMsg{label: label, err: adb.Launch(ctx, pkg)}
 	}
 }
 
@@ -280,10 +294,10 @@ func (m *Model) startUninstall() tea.Cmd {
 // so returning to browse doesn't keep listing apps that are already gone.
 // results is positional against queue: each uninstallStep appends exactly one
 // entry before advancing, in queue order.
-func removeUninstalled(apps, queue []*adb.App, results []string) []*adb.App {
+func removeUninstalled(apps, queue []*adb.App, results []uninstallStepMsg) []*adb.App {
 	removed := map[string]bool{}
 	for i, a := range queue {
-		if i < len(results) && !strings.HasPrefix(results[i], "FALHOU") {
+		if i < len(results) && !results[i].failed {
 			removed[a.Pkg] = true
 		}
 	}
@@ -340,7 +354,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case uninstallStepMsg:
-		m.results = append(m.results, msg.result)
+		m.results = append(m.results, msg)
 		m.doneN++
 		if m.doneN >= len(m.queue) {
 			m.mode = modeDone
@@ -352,9 +366,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case launchDoneMsg:
 		if msg.err != nil {
-			m.flash = "erro ao abrir: " + msg.err.Error()
+			m.flash = "could not open: " + msg.err.Error()
 		} else {
-			m.flash = "abriu " + msg.label + " no celular"
+			m.flash = "opened " + msg.label + " on the device"
 		}
 		return m, nil
 
@@ -497,7 +511,7 @@ func (m Model) updateBrowse(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Open the app on the device, so you can remind yourself what it is
 		// before deciding to remove it.
 		if a := m.currentApp(); a != nil {
-			m.flash = "abrindo " + a.Label + "..."
+			m.flash = "opening " + a.Label + "..."
 			return m, launchCmd(a.Pkg, a.Label)
 		}
 
@@ -554,7 +568,10 @@ func (m *Model) clampOffset() {
 	if t.cursor >= t.offset+h {
 		t.offset = t.cursor - h + 1
 	}
-	t.offset = clamp(t.offset, 0, max(0, len(t.apps)-1))
+	// Cap at len-h, not len-1: the last screenful should sit flush at the bottom
+	// rather than scrolling into empty space. Reachable by growing the window,
+	// which raises h while offset stays put.
+	t.offset = clamp(t.offset, 0, max(0, len(t.apps)-h))
 }
 
 // ---------- rendering ----------
@@ -628,7 +645,7 @@ func (m Model) listLines(h int) []string {
 	lines := make([]string, 0, h)
 
 	if len(t.apps) == 0 {
-		lines = append(lines, dim.Render("  nada nesta categoria"))
+		lines = append(lines, dim.Render("  nothing in this category"))
 	}
 	end := min(t.offset+h, len(t.apps))
 	for i := t.offset; i < end && len(lines) < h; i++ {
@@ -691,8 +708,8 @@ func (m Model) appRow(a *adb.App, cursor, checked bool) string {
 func (m Model) helpBlock() string {
 	type binding struct{ key, desc string }
 	rows := [][]binding{
-		{{"←/→", "categoria"}, {"↑/↓", "navegar"}, {"espaço", "marcar"}, {"a", "marcar tudo"}, {"o", "abrir"}},
-		{{"/", "filtrar"}, {"u", "limpar"}, {"d", "desinstalar"}, {"?", "ajuda"}, {"q", "sair"}},
+		{{"←/→", "category"}, {"↑/↓", "navigate"}, {"space", "mark"}, {"a", "mark all"}, {"o", "open"}},
+		{{"/", "filter"}, {"u", "clear"}, {"d", "uninstall"}, {"?", "help"}, {"q", "quit"}},
 	}
 	colW := max(14, m.width/5)
 
@@ -730,30 +747,30 @@ func (m Model) helpView() string {
 		title string
 		rows  [][2]string
 	}{
-		{"Navegar", [][2]string{
-			{"← → h l Tab", "trocar de aba"},
-			{"↑ ↓ j k", "mover na lista"},
-			{"PgUp PgDn", "pular uma tela"},
-			{"g G", "inicio / fim da lista"},
+		{"Navigate", [][2]string{
+			{"← → h l Tab", "switch category"},
+			{"↑ ↓ j k", "move through the list"},
+			{"PgUp PgDn", "jump one screen"},
+			{"g G", "start / end of the list"},
 		}},
-		{"Selecionar", [][2]string{
-			{"espaço", "marcar ou desmarcar o app sob o cursor"},
-			{"a", "marcar a aba inteira (desmarca se ja estiver toda marcada)"},
-			{"u", "limpar tudo que estiver marcado"},
+		{"Select", [][2]string{
+			{"space", "mark or unmark the app under the cursor"},
+			{"a", "mark the whole category (unmarks if all are already marked)"},
+			{"u", "clear everything marked"},
 		}},
-		{"Filtrar", [][2]string{
-			{"/", "filtrar por nome ou pacote"},
-			{"esc", "limpar o filtro"},
+		{"Filter", [][2]string{
+			{"/", "filter by name or package"},
+			{"esc", "clear the filter"},
 		}},
-		{"Agir", [][2]string{
-			{"o  enter", "abrir o app no celular"},
-			{"d", "revisar e desinstalar os marcados"},
-			{"q", "sair sem mudar nada"},
+		{"Act", [][2]string{
+			{"o  enter", "open the app on the device"},
+			{"d", "review and uninstall what's marked"},
+			{"q", "quit without changing anything"},
 		}},
 	}
 
 	var b strings.Builder
-	b.WriteString(appTitle.Render(" AJUDA ") + "\n")
+	b.WriteString(appTitle.Render(" HELP ") + "\n")
 	b.WriteString(m.rule() + "\n")
 
 	for _, s := range sections {
@@ -765,13 +782,12 @@ func (m Model) helpView() string {
 	}
 
 	b.WriteString("\n" + m.rule() + "\n")
-	b.WriteString(fmt.Sprintf("   %s\n",
-		dim.Render(fmt.Sprintf(
-			"%d apps ja vem com nome real embutido no binario. Nome em italico apagado",
-			classify.SeedSize()))))
+	fmt.Fprintf(&b, "   %s\n", dim.Render(fmt.Sprintf(
+		"%d apps ship with a real name built into the binary. A dim italic label",
+		classify.SeedSize())))
 	b.WriteString("   " + dim.Render(
-		"e um chute a partir do nome do pacote; rodar sem --no-llm resolve esses.") + "\n\n")
-	b.WriteString("   " + dim.Render("qualquer tecla pra voltar"))
+		"is guessed from the package name; run with --llm to resolve those.") + "\n\n")
+	b.WriteString("   " + dim.Render("any key to go back"))
 	return b.String()
 }
 
@@ -783,17 +799,17 @@ func (m Model) browseView() string {
 	b.WriteString(m.rule() + "\n")
 
 	if m.mode == modeFilter {
-		b.WriteString(keyStyle.Render(" filtrar: ") + m.filter + "▌\n\n")
-		b.WriteString(dim.Render(" enter ou esc pra voltar"))
+		b.WriteString(keyStyle.Render(" filter: ") + m.filter + "▌\n\n")
+		b.WriteString(dim.Render(" enter or esc to go back"))
 		return b.String()
 	}
 
 	t := m.tabs[m.active]
-	left := fmt.Sprintf(" %s marcados · %s",
+	left := fmt.Sprintf(" %s marked · %s",
 		rowChecked.Render(fmt.Sprint(len(m.selected))), humanMB(m.selectedSize()))
 	right := dim.Render(fmt.Sprintf("%s · %d apps · %s ", t.name, len(t.apps), humanMB(t.sizeMB)))
 	if m.filter != "" {
-		right = dim.Render(fmt.Sprintf("filtro %q · ", m.filter)) + right
+		right = dim.Render(fmt.Sprintf("filter %q · ", m.filter)) + right
 	}
 	gap := max(1, m.width-lipgloss.Width(left)-lipgloss.Width(right))
 	b.WriteString(left + strings.Repeat(" ", gap) + right + "\n")
@@ -804,7 +820,7 @@ func (m Model) browseView() string {
 	case m.flash != "":
 		b.WriteString(okStyle.Render(" "+truncate(m.flash, m.width-2)) + "\n")
 	case m.warning != "":
-		b.WriteString(warnStyle.Render(" aviso: "+truncate(m.warning, m.width-9)) + "\n")
+		b.WriteString(warnStyle.Render(" warning: "+truncate(m.warning, m.width-11)) + "\n")
 	default:
 		b.WriteString("\n")
 	}
@@ -819,14 +835,15 @@ func (m Model) confirmView() string {
 	apps := m.selectedApps()
 
 	var b strings.Builder
-	b.WriteString(dangerStyle.Render(" CONFIRMAR DESINSTALACAO ") + "\n")
+	b.WriteString(dangerStyle.Render(" CONFIRM UNINSTALL ") + "\n")
 	b.WriteString(m.rule() + "\n\n")
-	b.WriteString(fmt.Sprintf("   Vao ser removidos %s apps, liberando %s:\n\n",
+	fmt.Fprintf(&b, "   %s apps will be removed, freeing %s:\n\n",
 		dangerStyle.Render(fmt.Sprint(len(apps))),
-		dangerStyle.Render(humanMB(totalSize(apps)))))
+		dangerStyle.Render(humanMB(totalSize(apps))))
 
 	h := m.listHeight()
-	start := clamp(m.confirmScroll, 0, max(0, len(apps)-1))
+	// Same bound updateConfirm clamps confirmScroll to, so the two agree.
+	start := clamp(m.confirmScroll, 0, max(0, len(apps)-h))
 	end := min(start+h, len(apps))
 	for i := start; i < end; i++ {
 		a := apps[i]
@@ -839,15 +856,15 @@ func (m Model) confirmView() string {
 		b.WriteString("\n")
 	}
 	if end < len(apps) {
-		b.WriteString(dim.Render(fmt.Sprintf("   ...e mais %d abaixo (↑/↓ rola)", len(apps)-end)) + "\n")
+		b.WriteString(dim.Render(fmt.Sprintf("   ...and %d more below (↑/↓ scrolls)", len(apps)-end)) + "\n")
 	} else {
 		b.WriteString("\n")
 	}
 
 	b.WriteString(m.rule() + "\n")
-	b.WriteString(dangerStyle.Render("   Os dados locais de cada app vao junto. Isso nao tem volta.") + "\n\n")
-	b.WriteString("   " + keyStyle.Render("y") + dim.Render(" confirmar e desinstalar") +
-		"      " + keyStyle.Render("qualquer outra tecla") + dim.Render(" cancelar"))
+	b.WriteString(dangerStyle.Render("   Each app's local data goes with it. This cannot be undone.") + "\n\n")
+	b.WriteString("   " + keyStyle.Render("y") + dim.Render(" confirm and uninstall") +
+		"      " + keyStyle.Render("any other key") + dim.Render(" cancel"))
 	return b.String()
 }
 
@@ -858,7 +875,7 @@ func (m Model) runningView() string {
 	total := len(m.queue)
 
 	var b strings.Builder
-	b.WriteString(appTitle.Render(" DESINSTALANDO ") + "\n")
+	b.WriteString(appTitle.Render(" UNINSTALLING ") + "\n")
 	b.WriteString(m.rule() + "\n\n")
 
 	barW := clamp(m.width-20, 10, 50)
@@ -868,18 +885,14 @@ func (m Model) runningView() string {
 	}
 	bar := okStyle.Render(strings.Repeat("█", filled)) +
 		ruleStyle.Render(strings.Repeat("░", barW-filled))
-	b.WriteString(fmt.Sprintf("   %s  %d/%d\n\n", bar, m.doneN, total))
-	b.WriteString("   " + dim.Render("removendo agora: ") + rowActive.Render(m.current) + "\n\n")
+	fmt.Fprintf(&b, "   %s  %d/%d\n\n", bar, m.doneN, total)
+	b.WriteString("   " + dim.Render("removing now: ") + rowActive.Render(m.current) + "\n\n")
 
 	// Show the tail of what's been done, newest last, filling the body.
 	h := m.listHeight() - 2
 	start := max(0, len(m.results)-h)
 	for _, r := range m.results[start:] {
-		if strings.HasPrefix(r, "FALHOU") {
-			b.WriteString("   " + dangerStyle.Render(truncate(r, m.width-4)) + "\n")
-		} else {
-			b.WriteString("   " + okStyle.Render(truncate(r, m.width-4)) + "\n")
-		}
+		b.WriteString("   " + resultStyle(r).Render(truncate(r.text, m.width-4)) + "\n")
 	}
 	return b.String()
 }
@@ -888,25 +901,27 @@ func (m Model) doneView() string {
 	var b strings.Builder
 	var failed int
 	for _, r := range m.results {
-		if strings.HasPrefix(r, "FALHOU") {
+		if r.failed {
 			failed++
 		}
 	}
 
-	b.WriteString(appTitle.Render(" RESULTADO ") + "\n")
+	b.WriteString(appTitle.Render(" RESULT ") + "\n")
 	b.WriteString(m.rule() + "\n\n")
 	for _, r := range m.results {
-		if strings.HasPrefix(r, "FALHOU") {
-			b.WriteString("   " + dangerStyle.Render(r) + "\n")
-		} else {
-			b.WriteString("   " + okStyle.Render(r) + "\n")
-		}
+		b.WriteString("   " + resultStyle(r).Render(r.text) + "\n")
 	}
 	b.WriteString("\n" + m.rule() + "\n")
-	b.WriteString(fmt.Sprintf("   %d removidos, %d falharam\n\n",
-		len(m.results)-failed, failed))
-	b.WriteString("   " + dim.Render("qualquer tecla pra voltar"))
+	fmt.Fprintf(&b, "   %d removed, %d failed\n\n", len(m.results)-failed, failed)
+	b.WriteString("   " + dim.Render("any key to go back"))
 	return b.String()
+}
+
+func resultStyle(r uninstallStepMsg) lipgloss.Style {
+	if r.failed {
+		return dangerStyle
+	}
+	return okStyle
 }
 
 // ---------- small helpers ----------
