@@ -1,4 +1,4 @@
-// adb-triage is a terminal UI for reviewing and uninstalling Android apps over
+// adb-triage is a TUI for reviewing and uninstalling Android apps over
 // adb. It lists user-installed packages grouped by category, with disk usage,
 // and lets you multi-select and remove them in one pass.
 //

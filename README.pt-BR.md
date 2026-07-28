@@ -17,7 +17,7 @@
   <b>Português (BR)</b>
 </p>
 
-Uma interface de terminal pra revisar e desinstalar apps Android via ADB.
+Uma TUI pra revisar e desinstalar apps Android via ADB.
 
 Em vez de rolar dezenas de nomes de pacote tipo `com.instagram.barcelona`,
 o **adb-triage** mostra o nome real de cada app, a categoria e quanto de

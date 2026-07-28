@@ -17,7 +17,7 @@
   <a href="./README.pt-BR.md">Português (BR)</a>
 </p>
 
-A terminal UI for reviewing and uninstalling Android apps over ADB.
+A TUI for reviewing and uninstalling Android apps over ADB.
 
 Instead of scrolling through dozens of package names like
 `com.instagram.barcelona`, **adb-triage** shows each app's real name,
