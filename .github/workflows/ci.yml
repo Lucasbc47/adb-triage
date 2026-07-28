@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # gofmt -l exits 0 even when it finds problems, so its output has to be
+      # tested explicitly or a badly formatted PR passes.
+      - name: gofmt
+        run: |
+          if [ -n "$(gofmt -l .)" ]; then
+            echo "These files need gofmt:"
+            gofmt -l .
+            exit 1
+          fi
+
+      - name: vet
+        run: go vet ./...
+
+      - name: test
+        run: go test -race ./...
+
+      - name: build
+        run: go build ./...
+
+      # seed.json has a hand-curated layout that editors flatten on save. If
+      # running the formatter changes anything, the committed file was stale.
+      - name: seed.json is formatted
+        run: |
+          go run ./cmd/seedfmt
+          git diff --exit-code internal/classify/seed.json
