@@ -1,4 +1,4 @@
-module adb-triage
+module github.com/Lucasbc47/adb-triage
 
 go 1.24.0
 
