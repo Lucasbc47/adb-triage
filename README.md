@@ -11,6 +11,12 @@
   <img src="https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20windows-lightgrey" alt="Platforms">
 </p>
 
+<p align="center">
+  <b>English</b>
+  ·
+  <a href="./README.pt-BR.md">Português (BR)</a>
+</p>
+
 A terminal UI for reviewing and uninstalling Android apps over ADB.
 
 Instead of scrolling through dozens of package names like
@@ -247,11 +253,12 @@ Useful one-liners:
 
 | Symptom | Fix |
 |---------|-----|
-| `nao consegui falar com o adb` | `adb` is not on your `PATH`. Install Platform Tools and reopen the shell. |
-| `nenhum dispositivo autorizado` | Enable USB debugging, replug the cable, and accept the prompt on the phone. Verify with `adb devices`. |
-| `N dispositivos conectados` | Only one device at a time is supported. Disconnect the others, including emulators. |
-| `aviso: nao consegui ler os tamanhos` | `dumpsys diskstats` is restricted on some ROMs. The tool continues without sizes. |
-| App list looks short | Background services are hidden by default. Run with `--all`. |
+| `could not talk to adb` | `adb` is not on your `PATH`. Install Platform Tools and reopen the shell. |
+| `no authorized device found` | Enable USB debugging, replug the cable, and accept the prompt on the phone. Verify with `adb devices`. |
+| `N devices connected` | Only one device at a time is supported. Disconnect the others, including emulators. |
+| `no third-party apps found` | The device has no user-installed apps, or `pm list packages -3` was blocked. |
+| `warning: could not read app sizes` | `dumpsys diskstats` is restricted on some ROMs. The tool continues without sizes. |
+| `nothing to show (try --all)` | Every app was filtered out as a background service. Run with `--all`. |
 | Uninstall fails | The package is a protected system app that `pm uninstall --user 0` cannot touch. |
 | Sizes look too small | `dumpsys diskstats` excludes media under `/sdcard/Android/media`, which dominates for apps like WhatsApp. |
 | `context deadline exceeded` | The device stopped responding. Reads time out after 30s and uninstalls after 2min. Unlock the screen, replug, and retry. |
@@ -288,6 +295,7 @@ go test ./...
 | `make build` | Build the binary for the current platform |
 | `make run` | Build, then run |
 | `make test` | Run the test suite |
+| `make check` | Run everything CI runs (gofmt, vet, tests) |
 | `make fmt-seed` | Restore `seed.json`'s aligned, grouped layout |
 | `make clean` | Remove built binaries |
 
