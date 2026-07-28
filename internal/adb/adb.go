@@ -4,18 +4,34 @@ package adb
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
+)
+
+// Timeouts for the adb calls behind each exported function. Every one of these
+// shells out to a device that can wedge, unplug mid-command, or sit at a locked
+// screen, and adb itself will wait indefinitely in all three cases. Without a
+// deadline the TUI hangs with no way out short of killing the process.
+//
+// Uninstall gets far longer than the reads: removing a large app is genuinely
+// slow on some devices, and killing a half-finished uninstall is worse than
+// waiting.
+const (
+	ReadTimeout      = 30 * time.Second
+	LaunchTimeout    = 30 * time.Second
+	UninstallTimeout = 2 * time.Minute
 )
 
 // App is one installed package plus whatever metadata we could resolve.
 type App struct {
-	Pkg      string
-	Label    string // friendly name, filled in by the classifier
-	Category string
-	SizeMB   int64
+	Pkg        string
+	Label      string // friendly name, filled in by the classifier
+	Category   string
+	SizeMB     int64
 	Launchable bool
 }
 
@@ -25,10 +41,15 @@ type Device struct {
 	Model  string
 }
 
-func run(args ...string) (string, error) {
-	cmd := exec.Command("adb", args...)
+func run(ctx context.Context, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "adb", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		// A killed process reports a generic exit error, so surface the deadline
+		// explicitly. "signal: killed" alone points at the wrong problem.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return string(out), fmt.Errorf("adb %s: %w", strings.Join(args, " "), ctxErr)
+		}
 		return string(out), fmt.Errorf("adb %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
 	return string(out), nil
@@ -36,8 +57,8 @@ func run(args ...string) (string, error) {
 
 // Devices lists attached devices in the `device` state. Devices that are
 // unauthorized or offline are skipped, since we can't query them anyway.
-func Devices() ([]Device, error) {
-	out, err := run("devices", "-l")
+func Devices(ctx context.Context) ([]Device, error) {
+	out, err := run(ctx, "devices", "-l")
 	if err != nil {
 		return nil, err
 	}
@@ -55,8 +76,8 @@ func Devices() ([]Device, error) {
 		}
 		d := Device{Serial: fields[0]}
 		for _, f := range fields[2:] {
-			if strings.HasPrefix(f, "model:") {
-				d.Model = strings.TrimPrefix(f, "model:")
+			if model, ok := strings.CutPrefix(f, "model:"); ok {
+				d.Model = model
 			}
 		}
 		devs = append(devs, d)
@@ -65,15 +86,17 @@ func Devices() ([]Device, error) {
 }
 
 // ThirdParty returns packages the user installed (pm list packages -3).
-func ThirdParty() ([]string, error) {
-	out, err := run("shell", "pm", "list", "packages", "-3")
+func ThirdParty(ctx context.Context) ([]string, error) {
+	out, err := run(ctx, "shell", "pm", "list", "packages", "-3")
 	if err != nil {
 		return nil, err
 	}
 	var pkgs []string
 	sc := bufio.NewScanner(strings.NewReader(out))
 	for sc.Scan() {
-		if p := strings.TrimPrefix(strings.TrimSpace(sc.Text()), "package:"); p != "" {
+		// CutPrefix rather than TrimPrefix: a line without the "package:" prefix
+		// is adb chatter (daemon notices), not a package name.
+		if p, ok := strings.CutPrefix(strings.TrimSpace(sc.Text()), "package:"); ok && p != "" {
 			pkgs = append(pkgs, p)
 		}
 	}
@@ -82,8 +105,8 @@ func ThirdParty() ([]string, error) {
 
 // Launchable returns the set of packages that have an icon in the app drawer.
 // Anything missing from this set is a background service with no UI.
-func Launchable() (map[string]bool, error) {
-	out, err := run("shell", "cmd", "package", "query-activities", "--brief",
+func Launchable(ctx context.Context) (map[string]bool, error) {
+	out, err := run(ctx, "shell", "cmd", "package", "query-activities", "--brief",
 		"-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER")
 	if err != nil {
 		return nil, err
@@ -104,8 +127,8 @@ func Launchable() (map[string]bool, error) {
 // Sizes returns per-package disk usage in MB, summing the APK and its data
 // directory. Note this does NOT include media under /sdcard/Android/media,
 // which for apps like WhatsApp dwarfs everything dumpsys reports.
-func Sizes() (map[string]int64, error) {
-	out, err := run("shell", "dumpsys", "diskstats")
+func Sizes(ctx context.Context) (map[string]int64, error) {
+	out, err := run(ctx, "shell", "dumpsys", "diskstats")
 	if err != nil {
 		return nil, err
 	}
@@ -170,23 +193,23 @@ func HumanMB(mb int64) string {
 // Launch starts an app on the device. It resolves the launcher activity first
 // and starts it explicitly; if that fails it falls back to monkey, which some
 // apps respond to when resolve-activity comes back empty.
-func Launch(pkg string) error {
-	out, err := run("shell", "cmd", "package", "resolve-activity", "--brief",
+func Launch(ctx context.Context, pkg string) error {
+	out, err := run(ctx, "shell", "cmd", "package", "resolve-activity", "--brief",
 		"-c", "android.intent.category.LAUNCHER", pkg)
 	if err == nil {
 		if comp := lastComponent(out, pkg); comp != "" {
-			if _, err := run("shell", "am", "start", "-n", comp); err == nil {
+			if _, err := run(ctx, "shell", "am", "start", "-n", comp); err == nil {
 				return nil
 			}
 		}
 	}
 
-	out2, err2 := run("shell", "monkey", "-p", pkg,
+	out2, err2 := run(ctx, "shell", "monkey", "-p", pkg,
 		"-c", "android.intent.category.LAUNCHER", "1")
 	if err2 == nil && strings.Contains(out2, "Events injected: 1") {
 		return nil
 	}
-	return fmt.Errorf("nao consegui abrir %s (talvez nao tenha tela)", pkg)
+	return fmt.Errorf("could not open %s (it may have no UI)", pkg)
 }
 
 // lastComponent picks the "pkg/activity" line out of resolve-activity output,
@@ -206,12 +229,12 @@ func lastComponent(out, pkg string) string {
 // Uninstall removes a package for the current user. It tries the plain
 // uninstall first and falls back to `pm uninstall --user 0`, which works for
 // packages that are preinstalled but updatable.
-func Uninstall(pkg string) error {
-	out, err := run("uninstall", pkg)
+func Uninstall(ctx context.Context, pkg string) error {
+	out, err := run(ctx, "uninstall", pkg)
 	if err == nil && strings.Contains(out, "Success") {
 		return nil
 	}
-	out2, err2 := run("shell", "pm", "uninstall", "--user", "0", pkg)
+	out2, err2 := run(ctx, "shell", "pm", "uninstall", "--user", "0", pkg)
 	if err2 == nil && strings.Contains(out2, "Success") {
 		return nil
 	}

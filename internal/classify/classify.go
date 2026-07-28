@@ -35,26 +35,28 @@ type Entry struct {
 
 // Categories the model is allowed to choose from. Keeping this list closed
 // stops the model from inventing a new bucket for every third app.
+// Names are kept at or under 17 characters so they fit the sidebar column
+// without truncation (see ui.sidebarWidth).
 var Categories = []string{
-	"IA e assistentes",
-	"Bancos e financas",
-	"Governo e documentos",
-	"Transporte",
-	"Compras",
-	"Delivery",
-	"Redes sociais",
-	"Mensagens",
-	"Streaming e midia",
-	"Jogos e emuladores",
-	"Dev e ferramentas",
-	"Produtividade",
-	"Saude e fitness",
-	"Navegadores",
-	"Seguranca e contas",
-	"Fotos e camera",
-	"Casa inteligente",
-	"Sistema",
-	"Outros",
+	"AI & assistants",
+	"Banking & finance",
+	"Government & ID",
+	"Transport",
+	"Shopping",
+	"Food delivery",
+	"Social",
+	"Messaging",
+	"Streaming & media",
+	"Games & emulators",
+	"Dev & tools",
+	"Productivity",
+	"Health & fitness",
+	"Browsers",
+	"Security & auth",
+	"Photos & camera",
+	"Smart home",
+	"System",
+	"Other",
 }
 
 const systemPrompt = `You identify Android apps from their package names.
@@ -73,7 +75,7 @@ var seed = func() map[string]Entry {
 	// A malformed seed is a build-time mistake, not a runtime condition the
 	// user can fix, so fail loudly rather than silently shipping no labels.
 	if err := json.Unmarshal(seedJSON, &m); err != nil {
-		panic("seed.json invalido: " + err.Error())
+		panic("invalid seed.json: " + err.Error())
 	}
 	return m
 }()
@@ -101,14 +103,17 @@ func Lookup(pkgs []string) map[string]Entry {
 	return out
 }
 
-// Known reports whether a package was resolved from real data (seed or cache)
-// rather than guessed from its name.
-func Known(pkg string) bool {
-	if seed[pkg].Label != "" {
-		return true
-	}
+// KnownSet reports, per package, whether it was resolved from real data (seed or
+// cache) rather than guessed from its name. It takes the whole set at once
+// because the cache lives in a file: answering one package at a time would
+// re-read and re-parse that file once per app.
+func KnownSet(pkgs []string) map[string]bool {
 	cache, _ := loadCache()
-	return cache[pkg].Label != ""
+	known := make(map[string]bool, len(pkgs))
+	for _, p := range pkgs {
+		known[p] = seed[p].Label != "" || cache[p].Label != ""
+	}
+	return known
 }
 
 // Classify resolves labels for pkgs, asking Claude only about the ones neither
@@ -141,7 +146,7 @@ func Classify(ctx context.Context, pkgs []string) (map[string]Entry, error) {
 		for _, p := range missing {
 			out[p] = Heuristic(p)
 		}
-		return out, fmt.Errorf("%d apps sem nome real (LLM indisponivel): %w", len(missing), err)
+		return out, fmt.Errorf("%d apps without a real name (LLM unavailable): %w", len(missing), err)
 	}
 
 	for p, e := range resolved {
@@ -153,7 +158,7 @@ func Classify(ctx context.Context, pkgs []string) (map[string]Entry, error) {
 	}
 	// A failed cache write costs us nothing but a repeated API call next run.
 	if err := saveCache(cachePath, cache); err != nil {
-		fmt.Fprintf(os.Stderr, "aviso: nao consegui gravar o cache: %v\n", err)
+		fmt.Fprintf(os.Stderr, "warning: could not write the cache: %v\n", err)
 	}
 	for _, p := range missing {
 		if out[p].Label == "" {
@@ -169,11 +174,12 @@ func askClaude(ctx context.Context, pkgs []string) (map[string]Entry, error) {
 	var b strings.Builder
 	b.WriteString("Allowed categories:\n")
 	for _, c := range Categories {
-		b.WriteString("- " + c + "\n")
+		fmt.Fprintf(&b, "- %s\n", c)
 	}
 	b.WriteString("\nPackages:\n")
 	for _, p := range pkgs {
-		b.WriteString(p + "\n")
+		b.WriteString(p)
+		b.WriteByte('\n')
 	}
 	b.WriteString("\nReturn ONLY a JSON object mapping each package name to " +
 		`{"label": ..., "category": ...}. No prose, no markdown fences.`)
@@ -199,26 +205,29 @@ func askClaude(ctx context.Context, pkgs []string) (map[string]Entry, error) {
 
 	raw := stripFences(strings.TrimSpace(text.String()))
 	if raw == "" {
-		return nil, fmt.Errorf("resposta vazia do modelo")
+		return nil, fmt.Errorf("empty response from the model")
 	}
 
 	var out map[string]Entry
 	if err := json.Unmarshal([]byte(raw), &out); err != nil {
-		return nil, fmt.Errorf("resposta do modelo nao era JSON valido: %w", err)
+		return nil, fmt.Errorf("model response was not valid JSON: %w", err)
 	}
 	return out, nil
 }
 
 // stripFences drops a ```json ... ``` wrapper if the model added one despite
-// being told not to.
+// being told not to. It trims again after removing the closing fence: leaving
+// the newline that preceded it would make a fences-only reply come back as "\n"
+// rather than "", and the caller's empty-response check would miss it.
 func stripFences(s string) string {
 	if !strings.HasPrefix(s, "```") {
 		return s
 	}
+	// Drop the opening fence line, which may carry a language tag ("```json").
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		s = s[i+1:]
 	}
-	return strings.TrimSuffix(strings.TrimSpace(s), "```")
+	return strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(s), "```"))
 }
 
 // Heuristic is the last-resort guess for a package the seed, the cache, and the
@@ -226,24 +235,24 @@ func stripFences(s string) string {
 func Heuristic(pkg string) Entry {
 	lower := strings.ToLower(pkg)
 	rules := []struct{ match, category string }{
-		{"com.android.", "Sistema"},
-		{"com.google.android.", "Sistema"},
-		{"com.motorola.", "Sistema"},
-		{"com.qualcomm.", "Sistema"},
-		{"br.gov.", "Governo e documentos"},
-		{"bank", "Bancos e financas"},
-		{"game", "Jogos e emuladores"},
-		{"emu", "Jogos e emuladores"},
-		{"camera", "Fotos e camera"},
-		{"browser", "Navegadores"},
-		{"messenger", "Mensagens"},
+		{"com.android.", "System"},
+		{"com.google.android.", "System"},
+		{"com.motorola.", "System"},
+		{"com.qualcomm.", "System"},
+		{"br.gov.", "Government & ID"},
+		{"bank", "Banking & finance"},
+		{"game", "Games & emulators"},
+		{"emu", "Games & emulators"},
+		{"camera", "Photos & camera"},
+		{"browser", "Browsers"},
+		{"messenger", "Messaging"},
 	}
 	for _, r := range rules {
 		if strings.Contains(lower, r.match) {
 			return Entry{Label: prettify(pkg), Category: r.category}
 		}
 	}
-	return Entry{Label: prettify(pkg), Category: "Outros"}
+	return Entry{Label: prettify(pkg), Category: "Other"}
 }
 
 // prettify turns "com.example.my_app" into "My App" as a last-resort label.
