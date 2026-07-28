@@ -1,0 +1,7 @@
+# Normalize to LF in the repository and in the working tree, on every platform.
+#
+# Go tooling treats CRLF as a formatting error, so a CRLF checkout makes
+# `gofmt -l` report every file in the repo and stop being a usable signal.
+* text=auto eol=lf
+
+*.png binary
