@@ -47,9 +47,8 @@ desinstalações de uma vez só.
 - Espaço ocupado por app, os maiores primeiro
 - Seleção em lote entre categorias, com uma única tela de confirmação
 - Abre o app no aparelho pra você lembrar o que é antes de remover
-- Funciona totalmente offline, com uma base embutida de ~160 pacotes curados
-- Cache local, então um nome já resolvido nunca é consultado duas vezes
-- Integração opcional com o Claude pros pacotes que nada mais reconhece
+- Totalmente offline: sem rede, sem API key, sem nada gravado em disco
+- Os nomes vêm de uma base embutida de ~160 pacotes curados
 - Saída `--dump` e `--json` pra scripts e comparações
 
 ## Começando rápido
@@ -120,7 +119,6 @@ fundo e pacotes sem interface.
 
 | Flag | Descrição |
 |------|-----------|
-| `--llm` | Pergunta ao Claude sobre pacotes que a base e o cache não conhecem. Exige `ANTHROPIC_API_KEY`. |
 | `--all` | Inclui apps sem ícone na gaveta (serviços de fundo). |
 | `--dump` | Imprime a lista em texto puro e sai, sem abrir a TUI. |
 | `--json` | Imprime a lista em JSON e sai, sem abrir a TUI. |
@@ -164,49 +162,22 @@ desinstalar. Nada é removido até você apertar `d` e confirmar com `y`.
 
 ## Como os nomes são resolvidos
 
-Nomes e categorias são resolvidos em camadas, da mais barata pra mais cara. O
-nome do pacote é um identificador estável, então uma entrada da base ou do cache
-nunca fica desatualizada.
+Nomes e categorias vêm de dois lugares, e de mais nenhum:
 
 ```text
 nome do pacote
     |
-    +-- 1. seed.json          compilado no binário, offline, sem API key
-    +-- 2. cache local        respostas anteriores do Claude, em disco
-    +-- 3. Claude             só com --llm, só pro que sobrou
-    +-- 4. heurística         deduzido do nome do pacote, exibido em itálico
+    +-- 1. seed.json     compilado no binário, ~160 apps curados
+    +-- 2. heurística    deduzido do nome do pacote, exibido em itálico
 ```
 
-O que cair na etapa 4 aparece em *itálico*, pra deixar claro que o nome foi
-deduzido e não é conhecido de fato.
+O que cair na etapa 2 aparece em *itálico*, pra deixar claro que o nome foi
+deduzido e não é conhecido de fato. A correção é adicionar aquele pacote no
+`seed.json`, que é justamente a contribuição que o projeto mais quer.
 
-### Onde fica o cache
-
-Os nomes resolvidos são gravados em `adb-triage/labels.json`, dentro do
-diretório de cache do seu usuário:
-
-| Plataforma | Caminho |
-|------------|---------|
-| Linux | `~/.cache/adb-triage/labels.json` |
-| macOS | `~/Library/Caches/adb-triage/labels.json` |
-| Windows | `%LOCALAPPDATA%\adb-triage\labels.json` |
-
-Apague o arquivo pra forçar uma nova consulta. Chutes da heurística de propósito
-não vão pro cache, assim uma rodada futura com credenciais válidas ainda
-consegue melhorá-los.
-
-### Ativando o Claude
-
-```sh
-export ANTHROPIC_API_KEY=sk-ant-...
-./adb-triage --llm
-```
-
-Só os nomes dos pacotes são enviados, nunca dados de app, identificadores do
-aparelho ou qualquer coisa lida do celular. A consulta cobre apenas os pacotes
-que a base e o cache não pegaram, e o resultado é cacheado, então rodadas
-seguintes normalmente não fazem requisição nenhuma. Sem `--llm` ou sem API key
-o programa funciona normalmente, offline.
+Não existe chamada de rede, nem API key, nem nada gravado em disco. O binário se
+comporta igual online e offline, e toda execução dá o mesmo resultado pro mesmo
+aparelho.
 
 ### Categorias
 
@@ -327,7 +298,7 @@ go test ./...
 main.go                  flags, escolha do aparelho, saídas sem TUI
 internal/
 ├── adb/                 camada fina sobre a CLI do adb
-├── classify/            resolução de nomes: base, cache, Claude, heurística
+├── classify/            resolução de nomes: base curada, depois heurística
 │   └── seed.json        base curada de pacotes, embutida na compilação
 └── ui/                  modelo, telas e teclas do Bubble Tea
 cmd/

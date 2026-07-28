@@ -74,9 +74,8 @@ type Model struct {
 	device   adb.Device
 	apps     []*adb.App
 	selected map[string]bool
-	// known is precomputed at construction: classify.Known reads the cache
-	// file, and calling it per row per frame would be file I/O on every
-	// keystroke.
+	// known marks which labels came from the curated seed rather than being
+	// guessed. Precomputed once so rendering stays a map lookup per row.
 	known map[string]bool
 
 	tabs   []tab
@@ -87,7 +86,6 @@ type Model struct {
 
 	mode          mode
 	filter        string
-	warning       string
 	flash         string // result of the last action, cleared on the next key
 	results       []uninstallStepMsg
 	confirmScroll int
@@ -99,9 +97,8 @@ type Model struct {
 	current string
 }
 
-// New builds a model over the given apps. warning is displayed in the status
-// bar and may be empty.
-func New(device adb.Device, apps []*adb.App, warning string) Model {
+// New builds a model over the given apps.
+func New(device adb.Device, apps []*adb.App) Model {
 	pkgs := make([]string, len(apps))
 	for i, a := range apps {
 		pkgs[i] = a.Pkg
@@ -114,7 +111,6 @@ func New(device adb.Device, apps []*adb.App, warning string) Model {
 		known:    known,
 		height:   30,
 		width:    100,
-		warning:  warning,
 	}
 	m.rebuild()
 	return m
@@ -786,7 +782,7 @@ func (m Model) helpView() string {
 		"%d apps ship with a real name built into the binary. A dim italic label",
 		classify.SeedSize())))
 	b.WriteString("   " + dim.Render(
-		"is guessed from the package name; run with --llm to resolve those.") + "\n\n")
+		"is guessed from the package name; adding it to seed.json fixes it.") + "\n\n")
 	b.WriteString("   " + dim.Render("any key to go back"))
 	return b.String()
 }
@@ -814,14 +810,11 @@ func (m Model) browseView() string {
 	gap := max(1, m.width-lipgloss.Width(left)-lipgloss.Width(right))
 	b.WriteString(left + strings.Repeat(" ", gap) + right + "\n")
 
-	// The flash line reports the last action and takes the warning's slot: a
-	// result you just caused is more relevant than a startup warning.
-	switch {
-	case m.flash != "":
+	// The flash line reports the last action. It keeps its row even when empty,
+	// so the layout below it does not shift as messages come and go.
+	if m.flash != "" {
 		b.WriteString(okStyle.Render(" "+truncate(m.flash, m.width-2)) + "\n")
-	case m.warning != "":
-		b.WriteString(warnStyle.Render(" warning: "+truncate(m.warning, m.width-11)) + "\n")
-	default:
+	} else {
 		b.WriteString("\n")
 	}
 	b.WriteString(m.helpBlock())

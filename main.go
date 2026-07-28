@@ -2,9 +2,9 @@
 // adb. It lists user-installed packages grouped by category, with disk usage,
 // and lets you multi-select and remove them in one pass.
 //
-// Friendly names come from a curated table compiled into the binary, then from
-// a local cache of previous answers, and only then from Claude. That ordering
-// means the common case needs no API key and no network.
+// Friendly names come from a curated table compiled into the binary, falling
+// back to a guess derived from the package name. Nothing is fetched and nothing
+// is stored, so the tool works the same offline as online.
 package main
 
 import (
@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"os"
 	"sort"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -38,7 +37,6 @@ func readCtx() (context.Context, context.CancelFunc) {
 
 func run() error {
 	all := flag.Bool("all", false, "include apps with no launcher icon (background services)")
-	useLLM := flag.Bool("llm", false, "ask Claude for unknown names; without it, only the embedded table and cache are used")
 	dump := flag.Bool("dump", false, "print the list as plain text and exit, without opening the TUI")
 	asJSON := flag.Bool("json", false, "print the list as JSON and exit, without opening the TUI")
 	flag.Parse()
@@ -86,20 +84,7 @@ func run() error {
 		launchable = map[string]bool{}
 	}
 
-	var warning string
-	var entries map[string]classify.Entry
-	if *useLLM {
-		fmt.Fprintf(os.Stderr, "resolving names for %d packages...\n", len(pkgs))
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-		defer cancel()
-		entries, err = classify.Classify(ctx, pkgs)
-		if err != nil {
-			warning = err.Error()
-			fmt.Fprintln(os.Stderr, "warning:", warning)
-		}
-	} else {
-		entries = classify.Lookup(pkgs)
-	}
+	entries := classify.Lookup(pkgs)
 
 	apps := make([]*adb.App, 0, len(pkgs))
 	for _, p := range pkgs {
@@ -138,7 +123,7 @@ func run() error {
 		return nil
 	}
 
-	prog := tea.NewProgram(ui.New(device, apps, warning), tea.WithAltScreen())
+	prog := tea.NewProgram(ui.New(device, apps), tea.WithAltScreen())
 	_, err = prog.Run()
 	return err
 }

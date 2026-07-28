@@ -44,9 +44,8 @@ pass.
 - Per-app storage usage, largest first
 - Batch select across categories and uninstall in one confirmation step
 - Launch an app on the device to remind yourself what it is before removing it
-- Works fully offline using an embedded database of ~160 curated packages
-- Local cache so a resolved name is never looked up twice
-- Optional Claude integration for packages nothing else recognizes
+- Fully offline: no network, no API key, no state written to disk
+- Names come from an embedded database of ~160 curated packages
 - `--dump` and `--json` output for scripting and diffing
 
 ## Quick start
@@ -117,7 +116,6 @@ services and headless packages.
 
 | Flag | Description |
 |------|-------------|
-| `--llm` | Ask Claude about packages the seed and cache do not know. Requires `ANTHROPIC_API_KEY`. |
 | `--all` | Include apps without launcher icons (background services). |
 | `--dump` | Print the app list as plain text and exit, without opening the TUI. |
 | `--json` | Print the app list as JSON and exit, without opening the TUI. |
@@ -161,46 +159,22 @@ uninstalling. Nothing is removed until you press `d` and then confirm with `y`.
 
 ## How labels are resolved
 
-Names and categories are resolved in layers, cheapest first. A package name is a
-stable identifier, so a seeded or cached entry never goes stale.
+Names and categories come from two places, and nothing else:
 
 ```text
 package name
     |
-    +-- 1. seed.json          compiled into the binary, offline, no API key
-    +-- 2. local cache        previous Claude answers, on disk
-    +-- 3. Claude             only with --llm, only for what is still unknown
-    +-- 4. heuristic          derived from the package name, shown in italic
+    +-- 1. seed.json     compiled into the binary, ~160 curated apps
+    +-- 2. heuristic     derived from the package name, shown in italic
 ```
 
-Anything that falls through to step 4 is displayed in *italic* to make clear the
-name is inferred, not known.
+Anything that falls through to step 2 is displayed in *italic* to make clear the
+name was inferred rather than known. Adding that package to `seed.json` is the
+fix, and it is the contribution the project most wants.
 
-### Cache location
-
-Resolved names are written to `adb-triage/labels.json` inside your user cache
-directory:
-
-| Platform | Path |
-|----------|------|
-| Linux | `~/.cache/adb-triage/labels.json` |
-| macOS | `~/Library/Caches/adb-triage/labels.json` |
-| Windows | `%LOCALAPPDATA%\adb-triage\labels.json` |
-
-Delete the file to force a fresh lookup. Heuristic guesses are deliberately not
-cached, so a later run with working credentials can still upgrade them.
-
-### Enabling Claude
-
-```sh
-export ANTHROPIC_API_KEY=sk-ant-...
-./adb-triage --llm
-```
-
-Only package names are sent, never app data, device identifiers, or anything
-read off the phone. The lookup covers just the packages the seed and cache
-missed, and results are cached, so repeat runs usually make no request at all.
-Without `--llm` or an API key the tool works normally, offline.
+There is no network call, no API key, and no state written to disk. The binary
+behaves identically online and offline, and every run produces the same result
+for the same device.
 
 ### Categories
 
@@ -314,7 +288,7 @@ go test ./...
 main.go                  flags, device selection, non-TUI output modes
 internal/
 ├── adb/                 thin wrapper over the adb CLI
-├── classify/            label resolution: seed, cache, Claude, heuristic
+├── classify/            label resolution: curated seed, then heuristic
 │   └── seed.json        curated package database, embedded at build time
 └── ui/                  Bubble Tea model, views, and key handling
 cmd/

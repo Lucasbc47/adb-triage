@@ -110,15 +110,32 @@ func TestHeuristicNeverEmpty(t *testing.T) {
 	}
 }
 
-func TestStripFences(t *testing.T) {
-	tests := []struct{ in, want string }{
-		{"{\"a\":1}", "{\"a\":1}"},
-		{"```json\n{\"a\":1}\n```", "{\"a\":1}"},
-		{"```\n{\"a\":1}\n```", "{\"a\":1}"},
+// Lookup must answer for every package it is given, so callers never handle a
+// missing key. Unknown packages fall through to the heuristic.
+func TestLookupCoversEveryPackage(t *testing.T) {
+	pkgs := []string{"com.whatsapp", "com.totally.unknown", "singleword"}
+	got := Lookup(pkgs)
+	if len(got) != len(pkgs) {
+		t.Fatalf("got %d entries, want %d", len(got), len(pkgs))
 	}
-	for _, tt := range tests {
-		if got := stripFences(tt.in); got != tt.want {
-			t.Errorf("stripFences(%q) = %q, want %q", tt.in, got, tt.want)
+	for _, p := range pkgs {
+		if got[p].Label == "" {
+			t.Errorf("%s: empty label", p)
 		}
+		if got[p].Category == "" {
+			t.Errorf("%s: empty category", p)
+		}
+	}
+}
+
+// KnownSet distinguishes curated entries from guesses; the UI renders the
+// latter in italic.
+func TestKnownSet(t *testing.T) {
+	got := KnownSet([]string{"com.whatsapp", "com.totally.unknown"})
+	if !got["com.whatsapp"] {
+		t.Error("com.whatsapp is in the seed, want known")
+	}
+	if got["com.totally.unknown"] {
+		t.Error("com.totally.unknown is not in the seed, want unknown")
 	}
 }
