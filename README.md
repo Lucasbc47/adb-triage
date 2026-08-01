@@ -1,7 +1,7 @@
 <h1 align="center">ADB Triage</h1>
 
 <p align="center">
-  <img src="./docs/preview.png" alt="adb-triage preview" width="900">
+  <img src="./docs/demo.gif" alt="adb-triage preview" width="900">
 </p>
 
 <p align="center">
