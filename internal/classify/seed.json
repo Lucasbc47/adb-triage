@@ -9,6 +9,7 @@
   "com.motorola.genie":                             {"label": "Moto Genie", "category": "AI & assistants"},
 
   "com.nu.production":                              {"label": "Nubank", "category": "Banking & finance"},
+  "com.odete.samsung":                              {"label": "Samsung Itau", "category": "Banking & finance"},
   "br.com.intermedium":                             {"label": "Banco Inter", "category": "Banking & finance"},
   "br.com.Inter.CDPro":                             {"label": "Inter CDPro", "category": "Banking & finance"},
   "br.gov.caixa.tem":                               {"label": "Caixa Tem", "category": "Banking & finance"},
@@ -31,6 +32,7 @@
   "br.com.embryo.rpc.android":                      {"label": "Recarga Bilhete", "category": "Transport"},
   "com.jetscooters":                                {"label": "JetScooters", "category": "Transport"},
   "com.gojet.app":                                  {"label": "GoJet", "category": "Transport"},
+  "com.oakever.arrows":                             {"label": "Amaze GO!", "category": "Transport"},
 
   "com.mercadolibre":                               {"label": "Mercado Livre", "category": "Shopping"},
   "com.alibaba.aliexpresshd":                       {"label": "AliExpress", "category": "Shopping"},
@@ -82,6 +84,7 @@
   "com.motorola.fmplayer":                          {"label": "Radio FM", "category": "Streaming & media"},
   "com.cinemark":                                   {"label": "Cinemark", "category": "Streaming & media"},
   "com.feverup.fever":                              {"label": "Fever", "category": "Streaming & media"},
+  "com.kwai.video":                                 {"label": "Kwai", "category": "Streaming & media"},
 
   "com.valvesoftware.android.steam.community":      {"label": "Steam", "category": "Games & emulators"},
   "com.valvesoftware.steamlink":                    {"label": "Steam Link", "category": "Games & emulators"},
@@ -92,10 +95,13 @@
   "com.fastemulator.gba":                           {"label": "My Boy! (GBA)", "category": "Games & emulators"},
   "com.fastemulator.shaderpack":                    {"label": "My Boy! Shaders", "category": "Games & emulators"},
   "com.kiloo.subwaysurf":                           {"label": "Subway Surfers", "category": "Games & emulators"},
+  "com.hitrock.hideonline":                         {"label": "Hide Online", "category": "Games & emulators"},
+  "com.king.candycrushsaga":                        {"label": "Candy Crush Saga", "category": "Games & emulators"},
   "software.simplicial.nebulous":                   {"label": "Nebulous", "category": "Games & emulators"},
   "com.motorola.gamemode":                          {"label": "Moto Game Mode", "category": "Games & emulators"},
 
   "com.termux":                                     {"label": "Termux", "category": "Dev & tools"},
+  "com.topjohnwu.magisk":                           {"label": "Magisk", "category": "Dev & tools"},
   "org.fdroid.fdroid":                              {"label": "F-Droid", "category": "Dev & tools"},
   "ru.zdevs.zarchiver":                             {"label": "ZArchiver", "category": "Dev & tools"},
   "com.google.chromeremotedesktop":                 {"label": "Chrome Remote Desktop", "category": "Dev & tools"},
